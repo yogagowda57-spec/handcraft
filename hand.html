@@ -1,0 +1,375 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Energy Threads</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+*{
+  margin:0;
+  padding:0;
+  box-sizing:border-box;
+}
+
+body{
+  overflow:hidden;
+  background:#02050d;
+  font-family:Arial, sans-serif;
+}
+
+canvas{
+  position:fixed;
+  inset:0;
+}
+
+video{
+  display:none;
+}
+
+#faceCam{
+  position:fixed;
+  right:18px;
+  top:18px;
+  width:190px;
+  height:250px;
+  object-fit:cover;
+  border-radius:20px;
+  transform:scaleX(-1);
+  border:2px solid rgba(0,255,150,0.7);
+  box-shadow:
+    0 0 20px #00ff99,
+    0 0 50px rgba(0,255,150,0.5),
+    inset 0 0 25px rgba(0,255,150,0.3);
+  z-index:20;
+}
+
+.hud{
+  position:fixed;
+  left:20px;
+  top:20px;
+  z-index:10;
+  color:#00ff99;
+  font-size:14px;
+  letter-spacing:3px;
+  text-shadow:0 0 12px #00ff99;
+}
+
+.scan{
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background:repeating-linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.02),
+    rgba(255,255,255,0.02) 1px,
+    transparent 2px,
+    transparent 4px
+  );
+  mix-blend-mode:screen;
+}
+
+@media(max-width:700px){
+  #faceCam{
+    width:120px;
+    height:160px;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="hud">
+  AI ENERGY THREADS<br>
+  DUAL HAND TRACKING ACTIVE
+</div>
+
+<div class="scan"></div>
+
+<video id="inputVideo" autoplay playsinline muted></video>
+<video id="faceCam" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const inputVideo = document.getElementById('inputVideo');
+const faceCam = document.getElementById('faceCam');
+
+let w,h;
+
+function resize(){
+  w = canvas.width = window.innerWidth;
+  h = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+navigator.mediaDevices.getUserMedia({
+  video:{
+    facingMode:'user',
+    width:{ideal:1280},
+    height:{ideal:720}
+  },
+  audio:false
+}).then(stream=>{
+  inputVideo.srcObject = stream;
+  faceCam.srcObject = stream;
+});
+
+const hands = new Hands({
+  locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands:2,
+  modelComplexity:1,
+  minDetectionConfidence:0.75,
+  minTrackingConfidence:0.75
+});
+
+const trails = {};
+const anchors = [];
+const particles = [];
+const tipIds = [4,8,12,16,20];
+
+function lerp(a,b,t){
+  return a+(b-a)*t;
+}
+
+function distance(ax,ay,bx,by){
+  return Math.hypot(ax-bx, ay-by);
+}
+
+function particle(x,y){
+  particles.push({
+    x,y,
+    vx:(Math.random()-0.5)*2,
+    vy:(Math.random()-0.5)*2,
+    life:1,
+    size:Math.random()*3+1
+  });
+}
+
+function glow(x,y,r,color){
+  ctx.beginPath();
+  ctx.fillStyle=color;
+  ctx.shadowBlur=30;
+  ctx.shadowColor=color;
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fill();
+}
+
+function grid(){
+  ctx.save();
+  ctx.strokeStyle='rgba(0,255,150,0.05)';
+  ctx.lineWidth=1;
+
+  for(let x=0;x<w;x+=40){
+    ctx.beginPath();
+    ctx.moveTo(x,0);
+    ctx.lineTo(x,h);
+    ctx.stroke();
+  }
+
+  for(let y=0;y<h;y+=40){
+    ctx.beginPath();
+    ctx.moveTo(0,y);
+    ctx.lineTo(w,y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function skeleton(landmarks){
+
+  const con = [
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [5,9],[9,10],[10,11],[11,12],
+    [9,13],[13,14],[14,15],[15,16],
+    [13,17],[17,18],[18,19],[19,20],
+    [0,17]
+  ];
+
+  ctx.lineWidth=2;
+
+  con.forEach(c=>{
+    const a = landmarks[c[0]];
+    const b = landmarks[c[1]];
+
+    const ax = w - a.x*w;
+    const ay = a.y*h;
+
+    const bx = w - b.x*w;
+    const by = b.y*h;
+
+    ctx.beginPath();
+    ctx.strokeStyle='rgba(0,255,140,0.5)';
+    ctx.shadowBlur=15;
+    ctx.shadowColor='#00ff99';
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(bx,by);
+    ctx.stroke();
+  });
+}
+
+hands.onResults(results=>{
+
+  ctx.fillStyle='rgba(2,5,13,0.14)';
+  ctx.fillRect(0,0,w,h);
+
+  grid();
+
+  particles.forEach((p,i)=>{
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 0.015;
+
+    ctx.beginPath();
+    ctx.fillStyle=`rgba(0,255,150,${p.life})`;
+    ctx.shadowColor='#00ff99';
+    ctx.shadowBlur=20;
+    ctx.arc(p.x,p.y,p.size,0,Math.PI*2);
+    ctx.fill();
+
+    if(p.life<=0){
+      particles.splice(i,1);
+    }
+  });
+
+  if(results.multiHandLandmarks){
+
+    results.multiHandLandmarks.forEach((landmarks, handIndex)=>{
+
+      skeleton(landmarks);
+
+      tipIds.forEach((tipId, fingerIndex)=>{
+
+        const pt = landmarks[tipId];
+
+        const x = w - pt.x*w;
+        const y = pt.y*h;
+
+        const id = `${handIndex}-${fingerIndex}`;
+
+        if(!trails[id]){
+          trails[id]={
+            points:[],
+            sx:x,
+            sy:y
+          }
+        }
+
+        trails[id].sx = lerp(trails[id].sx, x, 0.3);
+        trails[id].sy = lerp(trails[id].sy, y, 0.3);
+
+        const sx = trails[id].sx;
+        const sy = trails[id].sy;
+
+        trails[id].points.push({x:sx,y:sy});
+
+        if(trails[id].points.length>45){
+          trails[id].points.shift();
+        }
+
+        ctx.beginPath();
+
+        for(let i=0;i<trails[id].points.length;i++){
+          const p = trails[id].points[i];
+
+          if(i===0){
+            ctx.moveTo(p.x,p.y);
+          }else{
+            const prev = trails[id].points[i-1];
+            const mx = (prev.x+p.x)/2;
+            const my = (prev.y+p.y)/2;
+            ctx.quadraticCurveTo(prev.x,prev.y,mx,my);
+          }
+        }
+
+        ctx.strokeStyle='#00ff99';
+        ctx.lineWidth=4;
+        ctx.shadowBlur=25;
+        ctx.shadowColor='#00ff99';
+        ctx.stroke();
+
+        ctx.strokeStyle='rgba(0,255,150,0.15)';
+        ctx.lineWidth=12;
+        ctx.stroke();
+
+        glow(sx,sy,6,'#00ff99');
+
+        if(Math.random()<0.6){
+          particle(sx,sy);
+        }
+
+        const thumb = landmarks[4];
+        const tx = w - thumb.x*w;
+        const ty = thumb.y*h;
+
+        const d = distance(tx,ty,sx,sy);
+
+        if(tipId!==4 && d<35){
+          const last = anchors[anchors.length-1];
+
+          if(!last || distance(last.x,last.y,sx,sy)>30){
+            anchors.push({
+              x:sx,
+              y:sy,
+              pulse:0
+            });
+          }
+        }
+      });
+    });
+  }
+
+  anchors.forEach(a=>{
+
+    a.pulse += 0.05;
+
+    glow(a.x,a.y,8+Math.sin(a.pulse)*2,'#00ff99');
+
+    ctx.beginPath();
+    ctx.strokeStyle='rgba(0,255,150,0.3)';
+    ctx.lineWidth=2;
+    ctx.shadowBlur=20;
+    ctx.shadowColor='#00ff99';
+    ctx.arc(a.x,a.y,18+Math.sin(a.pulse)*4,0,Math.PI*2);
+    ctx.stroke();
+
+  });
+
+  const grad = ctx.createRadialGradient(
+    w/2,h/2,100,
+    w/2,h/2,w
+  );
+
+  grad.addColorStop(0,'rgba(0,0,0,0)');
+  grad.addColorStop(1,'rgba(0,0,0,0.45)');
+
+  ctx.fillStyle=grad;
+  ctx.fillRect(0,0,w,h);
+
+});
+
+const camera = new Camera(inputVideo,{
+  onFrame: async()=>{
+    await hands.send({image:inputVideo});
+  },
+  width:1280,
+  height:720
+});
+
+camera.start();
+
+</script>
+</body>
+</html>
